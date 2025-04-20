@@ -1,29 +1,26 @@
-require('dotenv').config()
+require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const dns = require('dns');
 const { MongoClient } = require('mongodb');
-const nanoid = require('nanoid');
-
-const databaseUrl = process.env.DATABASE;
+const { nanoid } = require('nanoid');
 
 const app = express();
+const PORT = process.env.PORT || 4100;
+const MONGO_URI = process.env.DATABASE;
+
+// Middleware
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-app.use(express.static(path.join(__dirname, 'public')))
-
-MongoClient.connect(databaseUrl, { useNewUrlParser: true })
-  .then(client => {
-    app.locals.db = client.db('shortener');
-  })
-  .catch(() => console.error('Failed to connect to the database'));
-
+// URL shortening logic
 const shortenURL = (db, url) => {
-  const shortenedURLs = db.collection('shortenedURLs');
-  return shortenedURLs.findOneAndUpdate({ original_url: url },
+  const collection = db.collection('shortenedURLs');
+  return collection.findOneAndUpdate(
+    { original_url: url },
     {
       $setOnInsert: {
         original_url: url,
@@ -37,28 +34,29 @@ const shortenURL = (db, url) => {
   );
 };
 
-const checkIfShortIdExists = (db, code) => db.collection('shortenedURLs')
-  .findOne({ short_id: code });
+const checkIfShortIdExists = (db, code) => {
+  return db.collection('shortenedURLs').findOne({ short_id: code });
+};
 
+// Routes
 app.get('/', (req, res) => {
-  const htmlPath = path.join(__dirname, 'public', 'index.html');
-  res.sendFile(htmlPath);
-})
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 app.post('/new', (req, res) => {
   let originalUrl;
   try {
     originalUrl = new URL(req.body.url);
   } catch (err) {
-    return res.status(400).send({error: 'invalid URL'});
+    return res.status(400).json({ error: 'invalid URL' });
   }
 
   dns.lookup(originalUrl.hostname, (err) => {
     if (err) {
-      return res.status(404).send({error: 'Address not found'});
-    };
+      return res.status(404).json({ error: 'Address not found' });
+    }
 
-    const { db } = req.app.locals;
+    const db = req.app.locals.db;
     shortenURL(db, originalUrl.href)
       .then(result => {
         const doc = result.value;
@@ -67,25 +65,49 @@ app.post('/new', (req, res) => {
           short_id: doc.short_id,
         });
       })
-      .catch(console.error);
+      .catch(err => {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+      });
   });
 });
 
 app.get('/:short_id', (req, res) => {
+  const db = req.app.locals.db;
   const shortId = req.params.short_id;
 
-  const { db } = req.app.locals;
   checkIfShortIdExists(db, shortId)
     .then(doc => {
-      if (doc === null) return res.send('Uh oh. We could not find a link at that URL');
-
-      res.redirect(doc.original_url)
+      if (!doc) {
+        return res.status(404).send('Uh oh. We could not find a link at that URL');
+      }
+      res.redirect(doc.original_url);
     })
-    .catch(console.error);
-
+    .catch(err => {
+      console.error(err);
+      res.status(500).send('Server error');
+    });
 });
 
-app.set('port', process.env.PORT || 4100);
-const server = app.listen(app.get('port'), () => {
-  console.log(`Express running → PORT ${server.address().port}`);
-});
+// Start server after DB connection
+async function startServer() {
+  try {
+    const client = await MongoClient.connect(MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    console.log('✅ Connected to MongoDB');
+
+    // Set the database in app locals
+    app.locals.db = client.db('shortener');
+
+    const server = app.listen(PORT, () => {
+      console.log(`🚀 Express running → PORT ${server.address().port}`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to connect to the database', err);
+    process.exit(1);
+  }
+}
+
+startServer();
