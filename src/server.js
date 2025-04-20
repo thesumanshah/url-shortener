@@ -9,6 +9,8 @@ const { nanoid } = require('nanoid');
 
 const app = express();
 const PORT = process.env.PORT || 4100;
+// Ensure your DATABASE URI includes the default database name, e.g.: 
+// mongodb+srv://user:pass@cluster0.scunlcy.mongodb.net/shortener?retryWrites=true&w=majority
 const MONGO_URI = process.env.DATABASE;
 
 // Middleware
@@ -28,7 +30,7 @@ const shortenURL = (db, url) => {
       },
     },
     {
-      returnOriginal: false,
+      returnDocument: 'after',    // for MongoDB v4+, use returnDocument instead of returnOriginal
       upsert: true,
     }
   );
@@ -92,20 +94,21 @@ app.get('/:short_id', (req, res) => {
 // Start server after DB connection
 async function startServer() {
   try {
+    // With modern MongoDB Node.js driver, no need for useNewUrlParser/useUnifiedTopology
     const client = await MongoClient.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+      // Optional: set a server selection timeout
+      serverSelectionTimeoutMS: 5000,
     });
     console.log('✅ Connected to MongoDB');
 
     // Set the database in app locals
-    app.locals.db = client.db('shortener');
+    app.locals.db = client.db(); // uses the database from the URI
 
     const server = app.listen(PORT, () => {
       console.log(`🚀 Express running → PORT ${server.address().port}`);
     });
   } catch (err) {
-    console.error('❌ Failed to connect to the database', err);
+    console.error('❌ Failed to connect to the database:', err);
     process.exit(1);
   }
 }
